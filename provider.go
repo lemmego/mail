@@ -2,6 +2,9 @@ package mail
 
 import (
 	"log/slog"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
@@ -82,10 +85,40 @@ func (p *Provider) Provide(a app.App) error {
 //	    }),
 //	    From: mail.Address{Name: "Productshore", Email: "hello@productshore.com"},
 //	}
+//
+// Outside production it logs the bodies too, because there the log is the
+// only inbox there is. Without them a developer who has just signed up sees
+// that a verification email happened and not what it said — the link they
+// need is in a rendered body that nothing prints — which reads as a broken
+// feature rather than as an unconfigured transport. MAIL_LOG_BODIES
+// overrides the decision in either direction.
 func defaultTransport(a app.App) Transport {
-	if a.Config().Get("app.env") == "production" {
+	production := a.Config().Get("app.env") == "production"
+	if production {
 		slog.Warn("mail: no Transport is configured, so mail is being written to the log instead of sent; " +
 			"set Provider.Transport (see mail/smtp)")
 	}
-	return NewLogTransport()
+	return &LogTransport{Bodies: logBodies(!production)}
+}
+
+// logBodies reads MAIL_LOG_BODIES.
+//
+// Not through config.MustEnv with a bool fallback, which panics on a value it
+// cannot parse — so `MAIL_LOG_BODIES=` alone, present and empty, would take
+// the process down over a logging preference. Absent and empty both mean the
+// default; anything unreadable means the default plus a warning, because a
+// typo here decides whether a working credential is written to a log and is
+// worth saying out loud.
+func logBodies(fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv("MAIL_LOG_BODIES"))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		slog.Warn("mail: MAIL_LOG_BODIES is not readable as a boolean, leaving it at the default",
+			"value", raw, "want", "true or false", "default", fallback)
+		return fallback
+	}
+	return parsed
 }

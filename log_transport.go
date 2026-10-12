@@ -13,14 +13,21 @@ import "log/slog"
 type LogTransport struct {
 	// Bodies includes the rendered bodies in the log.
 	//
-	// Off by default: a verification or password-reset email contains a
-	// working credential, and a log is read by more people and kept for far
-	// longer than an inbox. Turn it on while writing a template, not while
-	// handling anyone's real address.
+	// Provider turns this on outside production, because in development the
+	// log *is* the inbox and a verification email without its link is no use
+	// to the person who just signed up — they can see that mail happened and
+	// not what it said, which looks like a broken feature.
+	//
+	// Off in production, where this transport should not be in use at all:
+	// those links are working credentials, and a log is read by more people
+	// and kept far longer than an inbox.
 	Bodies bool
 }
 
-// NewLogTransport returns a log transport.
+// NewLogTransport returns a log transport that records only the envelope.
+//
+// Prefer &LogTransport{Bodies: true} when the log is standing in for an
+// inbox, which is what Provider does outside production.
 func NewLogTransport() *LogTransport { return &LogTransport{} }
 
 func (t *LogTransport) Send(_ Context, m *Message) error {

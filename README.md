@@ -193,6 +193,26 @@ whole surface.
 `mail.NewLogTransport()` is the other half: it writes the message to the log,
 and is what you get by default.
 
+Outside production it logs the **rendered bodies** too, because there the log
+is the only inbox there is — a verification email whose link is never printed
+looks like a broken feature rather than an unconfigured transport. In
+production it records the envelope only: those links are working credentials,
+and a log is read by more people and kept far longer than an inbox. Note that
+in production this transport should not be in use at all, and the provider
+warns when it is.
+
+`MAIL_LOG_BODIES` overrides the decision in either direction. An absent or
+empty value means the default; anything unreadable means the default plus a
+warning, because a typo here decides whether a credential is written to a log.
+
+```shell
+MAIL_LOG_BODIES=false   # a staging box that must not log credentials
+```
+
+Mail is queued, so it is the **worker** that writes these records, not the web
+process. If nothing appears after a sign-up, check that a worker is running
+before suspecting the mailer.
+
 ## Deliberate omissions
 
 One transport. No multi-transport routing, no attachments, no notification
