@@ -121,24 +121,50 @@ func (t *Transport) Send(ctx context.Context, m *mail.Message) error {
 	return client.Quit()
 }
 
+// dial opens the connection, bounded by the context in both encryption modes.
+//
+// Two things used to escape the budget. tls.DialWithDialer took a bare
+// net.Dialer carrying neither Timeout nor Deadline, so implicit TLS — the
+// mode Config picks on its own for port 465 — had no limit on the connect or
+// the handshake; only the STARTTLS branch, which used DialContext, was
+// bounded. And nothing ever put a deadline on the socket, so once a relay
+// accepted the connection the conversation ran without a clock in either
+// mode.
+//
+// Both matter in the same place. net/smtp has no context support, so a
+// deadline on the connection is the only thing that can stop a stalled
+// exchange, and a queued send that never returns is worse than one that
+// fails: it holds a worker slot and leaves the job in `running` until
+// something requeues it, which against an unreachable relay is a loop with no
+// exit. The deadline covers the whole exchange rather than each read,
+// deliberately — that is what the Timeout field says it does.
 func (t *Transport) dial(ctx context.Context) (*smtp.Client, error) {
 	address := net.JoinHostPort(t.cfg.Host, fmt.Sprint(t.cfg.Port))
 	dialer := &net.Dialer{}
+	deadline, bounded := ctx.Deadline()
+	if bounded {
+		dialer.Deadline = deadline
+	}
 
+	var conn net.Conn
+	var err error
 	if t.cfg.Encryption == "tls" {
-		conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+		conn, err = tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
 			ServerName:         t.cfg.Host,
 			InsecureSkipVerify: t.cfg.InsecureSkipVerify,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("smtp: dialing %s: %w", address, err)
-		}
-		return smtp.NewClient(conn, t.cfg.Host)
+	} else {
+		conn, err = dialer.DialContext(ctx, "tcp", address)
 	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("smtp: dialing %s: %w", address, err)
+	}
+
+	if bounded {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("smtp: setting the deadline on %s: %w", address, err)
+		}
 	}
 	return smtp.NewClient(conn, t.cfg.Host)
 }
