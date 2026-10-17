@@ -46,13 +46,32 @@ func New(cfg Config) *Transport {
 		cfg.Timeout = 30 * time.Second
 	}
 	if cfg.Encryption == "" {
-		if cfg.Port == 465 {
-			cfg.Encryption = "tls"
-		} else {
-			cfg.Encryption = "starttls"
-		}
+		cfg.Encryption = encryptionForPort(cfg.Port)
 	}
 	return &Transport{cfg: cfg}
+}
+
+// encryptionForPort guesses the mode from the port, for a Config that did not
+// say.
+//
+// 465 is implicit TLS and 587 is STARTTLS, which is the pair everyone knows.
+// 2465 and 2587 are the same two shifted, and they are not obscure: a cloud
+// platform that blocks outbound SMTP to stop its customers sending spam
+// blocks 25, 465 and 587, so the alternates are what every relay publishes
+// for people deploying there — and therefore exactly what somebody reaches
+// for after a dial to 465 times out.
+//
+// Guessing STARTTLS for 2465 is the bad failure. The server is waiting for a
+// TLS ClientHello and gets a plaintext EHLO, so there is no clean refusal to
+// read: it hangs until something times out, which looks identical to the
+// blocked port that sent you there in the first place.
+func encryptionForPort(port int) string {
+	switch port {
+	case 465, 2465:
+		return "tls"
+	default:
+		return "starttls"
+	}
 }
 
 // ErrNoHost means the transport was built with no relay to talk to.

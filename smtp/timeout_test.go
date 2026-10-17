@@ -97,3 +97,30 @@ func TestImplicitTLSHonoursTheTimeout(t *testing.T) {
 			"a dialer with no deadline, so Timeout never applied to port 465")
 	}
 }
+
+// A platform that blocks outbound SMTP blocks 25, 465 and 587, so a relay
+// publishes 2465 and 2587 for people deploying there — and those are what
+// somebody reaches for after a dial to 465 times out. The rule knew only 465,
+// so 2465 was handed STARTTLS: a plaintext EHLO into a socket waiting for a
+// TLS ClientHello, which does not refuse, it hangs — indistinguishable from
+// the blocked port that sent you there.
+func TestTheAlternateSubmissionPortsPickTheRightMode(t *testing.T) {
+	for port, want := range map[int]string{
+		465:  "tls",
+		2465: "tls",
+		587:  "starttls",
+		2587: "starttls",
+		25:   "starttls",
+	} {
+		if got := New(Config{Host: "relay.test", Port: port}).cfg.Encryption; got != want {
+			t.Errorf("port %d resolved to %q, want %q", port, got, want)
+		}
+	}
+}
+
+// An explicit choice still wins over the guess.
+func TestAnExplicitEncryptionIsNotOverridden(t *testing.T) {
+	if got := New(Config{Host: "relay.test", Port: 465, Encryption: "none"}).cfg.Encryption; got != "none" {
+		t.Errorf("Encryption = %q, want none", got)
+	}
+}

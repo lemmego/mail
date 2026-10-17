@@ -155,14 +155,23 @@ smtp.Config{
     Port:       587,          // default
     Username:   "…",
     Password:   "…",
-    Encryption: "starttls",   // "tls" (465), "starttls" (587), "none"
+    Encryption: "starttls",   // "tls" (465, 2465), "starttls" (587, 2587), "none"
     Timeout:    30 * time.Second,
 }
 ```
 
-`Encryption` is inferred from the port when unset: `tls` for 465, `starttls`
-otherwise. `Timeout` bounds the whole conversation, because a relay having a
-slow minute must not hold a worker indefinitely.
+`Encryption` is inferred from the port when unset: `tls` for 465 and 2465,
+`starttls` otherwise. The alternates matter more than they look: a cloud
+platform that blocks outbound SMTP to stop its customers sending spam blocks
+25, 465 and 587, so 2465 and 2587 are what every relay publishes for people
+deploying there — and therefore exactly what somebody reaches for after a dial
+to 465 times out. Guessing STARTTLS for 2465 is the bad failure, because the
+server is waiting for a TLS ClientHello and gets a plaintext EHLO: there is no
+clean refusal to read, it hangs until something times out, which looks
+identical to the blocked port that sent you there.
+
+`Timeout` bounds the whole conversation, because a relay having a slow minute
+must not hold a worker indefinitely.
 
 `InsecureSkipVerify` exists for a local relay with a self-signed certificate
 and for nothing else. Against a real relay it makes the TLS pointless, since
