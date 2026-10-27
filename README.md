@@ -16,7 +16,7 @@ func (w Welcome) Build(ctx mail.Context, r mail.Renderer) (*mail.Message, error)
     }
     return &mail.Message{
         To:      []mail.Address{{Name: w.User.Name, Email: w.User.Email}},
-        Subject: "Welcome to Productshore",
+        Subject: "Welcome to Acme",
         HTML:    html,
         Text:    text,
     }, nil
@@ -34,7 +34,7 @@ go get github.com/lemmego/mail
 
 ```go
 &mail.Provider{
-    From: mail.Address{Name: "Productshore", Email: "hello@productshore.com"},
+    From: mail.Address{Name: "Acme", Email: "hello@example.com"},
 }
 ```
 
@@ -47,7 +47,7 @@ To actually send, pass a transport:
 
 ```go
 &mail.Provider{
-    From: mail.Address{Name: "Productshore", Email: "hello@productshore.com"},
+    From: mail.Address{Name: "Acme", Email: "hello@example.com"},
     Transport: smtp.New(smtp.Config{
         Host:     config.MustEnv("MAIL_HOST", ""),
         Port:     config.MustEnv("MAIL_PORT", 587),
@@ -222,7 +222,7 @@ Mail is queued, so it is the **worker** that writes these records, not the web
 process. If nothing appears after a sign-up, check that a worker is running
 before suspecting the mailer.
 
-## Deliberate omissions
+## Limitations
 
 One transport. No multi-transport routing, no attachments, no notification
 abstraction, no bounce handling. None of them is needed to send a verification
