@@ -142,12 +142,12 @@ func (t *Transport) Send(ctx context.Context, m *mail.Message) error {
 
 // dial opens the connection, bounded by the context in both encryption modes.
 //
-// Two things used to escape the budget. tls.DialWithDialer took a bare
-// net.Dialer carrying neither Timeout nor Deadline, so implicit TLS — the
-// mode Config picks on its own for port 465 — had no limit on the connect or
-// the handshake; only the STARTTLS branch, which used DialContext, was
-// bounded. And nothing ever put a deadline on the socket, so once a relay
-// accepted the connection the conversation ran without a clock in either
+// Two things have to be bounded, and both are easy to miss.
+// tls.DialWithDialer needs a net.Dialer carrying a Timeout or a Deadline, or
+// implicit TLS — the mode Config picks on its own for port 465 — has no limit
+// on the connect or the handshake, where the STARTTLS branch gets one from
+// DialContext. And the socket itself needs a deadline, or once a relay has
+// accepted the connection the conversation runs without a clock in either
 // mode.
 //
 // Both matter in the same place. net/smtp has no context support, so a
