@@ -3,7 +3,7 @@ module github.com/lemmego/mail
 go 1.27
 
 require (
-	github.com/lemmego/api v0.6.3
+	github.com/lemmego/api v0.11.0
 	github.com/lemmego/queue v0.4.4
 	github.com/lemmego/tasker v0.1.6
 )

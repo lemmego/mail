@@ -20,11 +20,37 @@ type Mailer struct {
 	transport Transport
 	renderer  Renderer
 	from      Address
+	locale    func(Context) string
+}
+
+// Option configures a Mailer.
+type Option func(*Mailer)
+
+// WithLocale tells the mailer how to find the language a message should be
+// written in.
+//
+// The signature is func(context.Context) string and nothing more, which is
+// what keeps this module free of any translator: i18n.LocaleOf satisfies it
+// structurally, and mail never learns what a locale is beyond "the name of a
+// directory under the templates directory". An empty answer means nobody
+// expressed a preference, which is not the same as preferring the default —
+// so nothing is looked up and no stat is wasted.
+//
+// It is read on the calling goroutine, inside Send and Queue, which is the
+// only place it can be: Queue renders eagerly and enqueues a self-contained
+// Message, so a worker has no context, no catalogue and nothing to resolve.
+// Resolving a locale in a job handler is the mistake this forecloses.
+func WithLocale(f func(Context) string) Option {
+	return func(m *Mailer) { m.locale = f }
 }
 
 // New returns a Mailer. Most applications get one from Provider.
-func New(transport Transport, renderer Renderer, from Address) *Mailer {
-	return &Mailer{transport: transport, renderer: renderer, from: from}
+func New(transport Transport, renderer Renderer, from Address, opts ...Option) *Mailer {
+	m := &Mailer{transport: transport, renderer: renderer, from: from}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Send builds the mailable and delivers it on the calling goroutine.
@@ -74,7 +100,7 @@ func (m *Mailer) build(ctx Context, mb Mailable) (*Message, error) {
 	if mb == nil {
 		return nil, fmt.Errorf("mail: nil mailable")
 	}
-	message, err := mb.Build(ctx, m.renderer)
+	message, err := mb.Build(ctx, m.rendererFor(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +112,20 @@ func (m *Mailer) build(ctx Context, mb Mailable) (*Message, error) {
 		return nil, err
 	}
 	return message, nil
+}
+
+// rendererFor binds this send's language to the renderer the Mailable gets.
+//
+// The Mailable is handed a plain Renderer and keeps calling Render with a
+// template name, exactly as before — which matters more than it looks:
+// several mailables in this repository's own consumer discard the context
+// they are given, so a design that expected a Build to read the locale itself
+// would have translated some bodies and silently not others.
+func (m *Mailer) rendererFor(ctx Context) Renderer {
+	if m.locale == nil {
+		return m.renderer
+	}
+	return renderIn(m.renderer, m.locale(ctx))
 }
 
 func (m *Mailer) applyFrom(message *Message) {

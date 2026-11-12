@@ -26,6 +26,23 @@ type templateRenderer struct {
 	html *template.Template
 	text *text.Template
 	err  error
+
+	// One parsed set per locale, built on first use and kept.
+	//
+	// A single sync.Once cannot serve this: the base set and each locale's
+	// are different parses of different globs, and a locale arrives from a
+	// request rather than from configuration, so there is no list to walk at
+	// boot. sync.Map rather than a mutex and a map because this is read on
+	// every send and written once per language.
+	locales sync.Map // locale -> *localeSet
+}
+
+// localeSet is one language's overlay, parsed once.
+type localeSet struct {
+	once sync.Once
+	html *template.Template
+	text *text.Template
+	err  error
 }
 
 // NewRenderer returns a Renderer over a directory of templates.
@@ -61,15 +78,70 @@ func (r *templateRenderer) Render(name string, data any) (string, string, error)
 	if err := r.load(); err != nil {
 		return "", "", err
 	}
+	return render(r.html, r.text, name, data)
+}
 
+// RenderIn renders a body from the locale's directory, falling back per
+// template to the base one.
+//
+// The fallback is per *template*, not per language, and that is the point: a
+// translator who has done resources/mail/fr/matched.gohtml and not
+// fr/verify_email.gohtml should get French for the one and English for the
+// other, rather than nothing for either or a boot error for the gap. It falls
+// out of how html/template works — the locale's glob is parsed on top of the
+// base set, and a later parse of the same template name replaces the earlier
+// one, which is documented behaviour rather than an accident.
+//
+// An unknown locale directory is not an error. A locale is added to the
+// supported list before anybody has translated anything, and mail going out in
+// the default language is the right behaviour for that week.
+func (r *templateRenderer) RenderIn(locale, name string, data any) (string, string, error) {
+	if err := r.load(); err != nil {
+		return "", "", err
+	}
+
+	dir, err := localeDir(r.dir, locale)
+	if err != nil {
+		return "", "", err
+	}
+
+	entry, _ := r.locales.LoadOrStore(locale, &localeSet{})
+	set := entry.(*localeSet)
+	set.once.Do(func() {
+		// Clone, so one language's overlay cannot leak into another's or into
+		// the base set. Parsing the locale glob into r.html directly would
+		// make the first language rendered the fallback for every other one.
+		if set.html, set.err = r.html.Clone(); set.err != nil {
+			return
+		}
+		if _, err := set.html.ParseGlob(filepath.Join(dir, "*.gohtml")); err != nil {
+			// No directory, or nothing in it: the base set stands.
+			set.html, _ = r.html.Clone()
+		}
+		if r.text != nil {
+			if set.text, _ = r.text.Clone(); set.text != nil {
+				if _, err := set.text.ParseGlob(filepath.Join(dir, "*.gotxt")); err != nil {
+					set.text, _ = r.text.Clone()
+				}
+			}
+		}
+	})
+	if set.err != nil {
+		return "", "", set.err
+	}
+	return render(set.html, set.text, name, data)
+}
+
+// render executes one template set, preferring a hand-written text part.
+func render(html *template.Template, txt *text.Template, name string, data any) (string, string, error) {
 	var htmlBody bytes.Buffer
-	if err := r.html.ExecuteTemplate(&htmlBody, name+".gohtml", data); err != nil {
+	if err := html.ExecuteTemplate(&htmlBody, name+".gohtml", data); err != nil {
 		return "", "", fmt.Errorf("mail: rendering %s: %w", name, err)
 	}
 
-	if r.text != nil {
+	if txt != nil {
 		var textBody bytes.Buffer
-		if err := r.text.ExecuteTemplate(&textBody, name+".gotxt", data); err == nil {
+		if err := txt.ExecuteTemplate(&textBody, name+".gotxt", data); err == nil {
 			return htmlBody.String(), textBody.String(), nil
 		}
 	}
@@ -128,18 +200,52 @@ type embeddedRenderer struct {
 	once sync.Once
 	html *template.Template
 	err  error
+
+	locales sync.Map // locale -> *localeSet
 }
 
-func (r *embeddedRenderer) Render(name string, data any) (string, string, error) {
+// Note an asymmetry with templateRenderer that predates this file and is left
+// as it was found: this renderer has no .gotxt support at all and always
+// derives its text part. Giving it one is a change to what an embedded
+// renderer sends, which belongs in its own commit rather than smuggled in
+// behind a locale feature.
+
+func (r *embeddedRenderer) load() error {
 	r.once.Do(func() {
 		r.html, r.err = template.ParseFS(r.fsys, filepath.Join(r.dir, "*.gohtml"))
 	})
-	if r.err != nil {
-		return "", "", r.err
+	return r.err
+}
+
+func (r *embeddedRenderer) Render(name string, data any) (string, string, error) {
+	if err := r.load(); err != nil {
+		return "", "", err
 	}
-	var body bytes.Buffer
-	if err := r.html.ExecuteTemplate(&body, name+".gohtml", data); err != nil {
-		return "", "", fmt.Errorf("mail: rendering %s: %w", name, err)
+	return render(r.html, nil, name, data)
+}
+
+func (r *embeddedRenderer) RenderIn(locale, name string, data any) (string, string, error) {
+	if err := r.load(); err != nil {
+		return "", "", err
 	}
-	return body.String(), TextFromHTML(body.String()), nil
+
+	dir, err := localeDir(r.dir, locale)
+	if err != nil {
+		return "", "", err
+	}
+
+	entry, _ := r.locales.LoadOrStore(locale, &localeSet{})
+	set := entry.(*localeSet)
+	set.once.Do(func() {
+		if set.html, set.err = r.html.Clone(); set.err != nil {
+			return
+		}
+		if _, err := set.html.ParseFS(r.fsys, filepath.Join(dir, "*.gohtml")); err != nil {
+			set.html, _ = r.html.Clone()
+		}
+	})
+	if set.err != nil {
+		return "", "", set.err
+	}
+	return render(set.html, nil, name, data)
 }

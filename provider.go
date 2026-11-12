@@ -32,6 +32,18 @@ type Provider struct {
 	// Templates is the directory of mail templates. Defaults to
 	// resources/mail.
 	Templates string
+	// Locale says which language a message is written in, by naming a
+	// subdirectory of Templates: a body at resources/mail/fr/matched.gohtml
+	// is used for "fr", and anything untranslated falls back to the base
+	// directory per template.
+	//
+	// github.com/lemmego/i18n's LocaleOf satisfies this, which is the whole
+	// reason the type is func(context.Context) string and not an interface:
+	// this module carries no translator and no CLDR tables, and an
+	// application that wires mail and translates nothing pays for neither.
+	//
+	// Left nil, nothing is looked up.
+	Locale func(Context) string
 }
 
 func (p *Provider) Provide(a app.App) error {
@@ -43,6 +55,11 @@ func (p *Provider) Provide(a app.App) error {
 	renderer := p.Renderer
 	if renderer == nil {
 		renderer = NewRenderer(templates)
+	}
+
+	var opts []Option
+	if p.Locale != nil {
+		opts = append(opts, WithLocale(p.Locale))
 	}
 
 	from := p.From
@@ -58,7 +75,7 @@ func (p *Provider) Provide(a app.App) error {
 		transport = defaultTransport(a)
 	}
 
-	mailer := New(transport, renderer, from)
+	mailer := New(transport, renderer, from, opts...)
 	a.AddService(mailer)
 	SetGlobal(mailer)
 
